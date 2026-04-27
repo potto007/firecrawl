@@ -35,6 +35,7 @@ import { withSpan, setSpanAttributes } from "../../../../lib/otel-tracer";
 import { scrapePDFWithRunPodMU } from "./runpodMU";
 import { reconcilePageCountWithFirePdf, scrapePDFWithFirePDF } from "./firePDF";
 import { scrapePDFWithParsePDF } from "./pdfParse";
+import { scrapePDFWithMinerULocal } from "./mineruLocal";
 import { captureExceptionWithZdrCheck } from "../../../../services/sentry";
 import { isPdfBuffer, PDF_SNIFF_WINDOW } from "./pdfUtils";
 import { comparePdfOutputs } from "./shadowComparison";
@@ -569,6 +570,34 @@ export async function scrapePDF(meta: Meta): Promise<EngineScrapeResult> {
               success: false,
             });
         }
+      }
+    }
+
+    // Local MinerU fallback (self-hosted GPU).
+    if (!result && !forceFirePDF && config.MINERU_LOCAL_URL) {
+      try {
+        result = await scrapePDFWithMinerULocal(
+          {
+            ...meta,
+            logger: meta.logger.child({
+              method: "scrapePDF/mineruLocal",
+            }),
+          },
+          tempFilePath,
+          maxPages,
+        );
+      } catch (error) {
+        if (
+          error instanceof RemoveFeatureError ||
+          error instanceof AbortManagerThrownError
+        ) {
+          throw error;
+        }
+        meta.logger.warn("Local MinerU failed -- falling back to pdfParse", {
+          method: "scrapePDF/mineruLocal",
+          error,
+          url: meta.rewrittenUrl ?? meta.url,
+        });
       }
     }
 

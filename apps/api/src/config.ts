@@ -174,6 +174,7 @@ const configSchema = z.object({
   // RunPod
   RUNPOD_MU_API_KEY: z.string().optional(),
   RUNPOD_MU_POD_ID: z.string().optional(),
+  MINERU_LOCAL_URL: z.string().optional(),
 
   // PDF Rust Extraction (pdf-inspector)
   PDF_RUST_EXTRACT_ENABLE: z.stringbool().optional(),
