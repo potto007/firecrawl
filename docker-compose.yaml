@@ -43,6 +43,7 @@ x-common-env: &common-env
   AUTUMN_SECRET_KEY: ${AUTUMN_SECRET_KEY}
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
   BULL_AUTH_KEY: ${BULL_AUTH_KEY}
+  MINERU_LOCAL_URL: ${MINERU_LOCAL_URL:-}
   TEST_API_KEY: ${TEST_API_KEY}
   SUPABASE_ANON_TOKEN: ${SUPABASE_ANON_TOKEN}
   SUPABASE_URL: ${SUPABASE_URL}
@@ -159,6 +160,42 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
     networks:
       - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+  mineru:
+    build:
+      context: .
+      dockerfile: docker/mineru/Dockerfile
+    environment:
+      MINERU_MODEL_SOURCE: local
+    entrypoint: mineru-api
+    command: --host 0.0.0.0 --port 8000
+    networks:
+      - backend
+    volumes:
+      - ${MINERU_MODELS_DIR:-~/.models/mineru}:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     logging:
       driver: "json-file"
       options:
