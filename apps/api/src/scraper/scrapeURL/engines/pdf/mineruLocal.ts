@@ -45,11 +45,17 @@ export async function scrapePDFWithMinerULocal(
 
   const body = (await response.json()) as Record<string, any>;
 
+  // MinerU /file_parse returns { results: { "<filename>": { md_content: "..." } } }
+  const firstResult =
+    body.results && typeof body.results === "object"
+      ? (Object.values(body.results)[0] as Record<string, any> | undefined)
+      : undefined;
+
   const markdown: string | undefined =
     body.markdown ??
     body.md_content ??
-    body.results?.[0]?.markdown ??
-    body.results?.[0]?.md_content;
+    firstResult?.md_content ??
+    firstResult?.markdown;
 
   if (!markdown) {
     meta.logger.warn("MinerU returned no markdown", {
