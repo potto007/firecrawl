@@ -8,6 +8,12 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = Number(process.env.PORT || 3001);
 const API_KEY = process.env.BROWSER_SERVICE_API_KEY || "";
+const DEFAULT_TTL = Number(process.env.BROWSER_SESSION_DEFAULT_TTL || 600);
+const MAX_TTL = Number(process.env.BROWSER_SESSION_MAX_TTL || 3600);
+const CDP_HOST = process.env.BROWSER_CDP_HOST || "localhost";
+const CDP_PORT = Number(process.env.BROWSER_CDP_PORT || 9222);
+
+let debugPort: number = 0;
 
 interface Session {
   id: string;
@@ -55,10 +61,31 @@ function resetActivityTimer(session: Session) {
   );
 }
 
+async function getPageTargetId(page: Page): Promise<string | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${debugPort}/json`);
+    const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>;
+    const pageUrl = page.url();
+    const target = targets.find(
+      (t) => t.type === "page" && t.url === pageUrl,
+    );
+    return target?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // POST /browsers - create session
 app.post("/browsers", authMiddleware, async (req, res) => {
   try {
-    const { ttl = 600, activityTtl = 300, persistentStorage } = req.body;
+    const {
+      ttl = DEFAULT_TTL,
+      activityTtl = Math.min(300, DEFAULT_TTL),
+      persistentStorage,
+    } = req.body;
+
+    const clampedTtl = Math.min(Math.max(ttl, 30), MAX_TTL);
+    const clampedActivityTtl = Math.min(Math.max(activityTtl, 10), clampedTtl);
 
     if (persistentStorage?.write) {
       for (const s of sessions.values()) {
@@ -80,12 +107,18 @@ app.post("/browsers", authMiddleware, async (req, res) => {
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     });
     const page = await context.newPage();
-    const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 
-    const timer = setTimeout(() => destroySession(id), ttl * 1000);
+    const targetId = await getPageTargetId(page);
+    const cdpUrl = targetId && debugPort
+      ? `ws://${CDP_HOST}:${debugPort}/devtools/page/${targetId}`
+      : "";
+
+    const expiresAt = new Date(Date.now() + clampedTtl * 1000).toISOString();
+
+    const timer = setTimeout(() => destroySession(id), clampedTtl * 1000);
     const activityTimer = setTimeout(
       () => destroySession(id),
-      activityTtl * 1000,
+      clampedActivityTtl * 1000,
     );
 
     const session: Session = {
@@ -93,8 +126,8 @@ app.post("/browsers", authMiddleware, async (req, res) => {
       context,
       page,
       createdAt: Date.now(),
-      ttl,
-      activityTtl,
+      ttl: clampedTtl,
+      activityTtl: clampedActivityTtl,
       lastActivity: Date.now(),
       timer,
       activityTimer,
@@ -102,11 +135,11 @@ app.post("/browsers", authMiddleware, async (req, res) => {
     };
     sessions.set(id, session);
 
-    console.log(`Session ${id} created (ttl=${ttl}s, ${sessions.size} active)`);
+    console.log(`Session ${id} created (ttl=${clampedTtl}s, ${sessions.size} active)`);
 
     res.json({
       sessionId: id,
-      cdpUrl: "",
+      cdpUrl,
       viewUrl: "",
       iframeUrl: "",
       interactiveIframeUrl: "",
@@ -272,10 +305,13 @@ async function start() {
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      `--remote-debugging-port=${CDP_PORT}`,
     ],
   });
 
-  console.log("Browser launched");
+  debugPort = CDP_PORT;
+
+  console.log(`Browser launched (CDP debug port: ${debugPort})`);
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Browser service listening on port ${PORT}`);
