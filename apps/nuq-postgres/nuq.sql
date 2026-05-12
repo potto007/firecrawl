@@ -52,7 +52,7 @@ GRANT service_role TO authenticator;
 
 CREATE TABLE IF NOT EXISTS public.browser_sessions (
   id uuid NOT NULL,
-  team_id uuid NOT NULL,
+  team_id text NOT NULL,
   scrape_id uuid,
   browser_id text NOT NULL,
   workspace_id text NOT NULL DEFAULT '',
@@ -78,7 +78,7 @@ CREATE INDEX IF NOT EXISTS browser_sessions_status_idx ON public.browser_session
 
 CREATE TABLE IF NOT EXISTS public.browser_session_activities (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  team_id uuid NOT NULL,
+  team_id text NOT NULL,
   session_id uuid NOT NULL REFERENCES public.browser_sessions(id),
   source text NOT NULL,
   language text NOT NULL DEFAULT 'node',
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS public.requests (
   id uuid NOT NULL,
   kind text NOT NULL,
   api_version text,
-  team_id uuid NOT NULL,
+  team_id text NOT NULL,
   origin text,
   integration text,
   target_hint text,
@@ -117,8 +117,8 @@ CREATE TABLE IF NOT EXISTS public.scrapes (
   url text,
   is_successful boolean NOT NULL DEFAULT false,
   error text,
-  time_taken integer,
-  team_id uuid NOT NULL,
+  time_taken numeric,
+  team_id text NOT NULL,
   options jsonb,
   cost_tracking jsonb,
   pdf_num_pages integer,
