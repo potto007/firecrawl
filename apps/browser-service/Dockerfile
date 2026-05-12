@@ -13,5 +13,6 @@ RUN npm run build
 
 ENV PORT=3001
 EXPOSE 3001
+EXPOSE 9222
 
 CMD ["npm", "start"]
