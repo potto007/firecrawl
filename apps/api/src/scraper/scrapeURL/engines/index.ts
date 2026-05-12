@@ -19,6 +19,10 @@ import {
   wikipediaMaxReasonableTime,
   isWikimediaUrl,
 } from "./wikipedia";
+import {
+  scrapeURLWithBrowserService,
+  browserServiceMaxReasonableTime,
+} from "./browser-service";
 import { queryEngpickerVerdict, useIndex } from "../../../services";
 import { hasFormatOfType } from "../../../lib/format-utils";
 import { getPDFMaxPages } from "../../../controllers/v2/types";
@@ -39,7 +43,8 @@ export type Engine =
   | "document"
   | "index"
   | "index;documents"
-  | "wikipedia";
+  | "wikipedia"
+  | "browser-service";
 
 const useFireEngine =
   config.FIRE_ENGINE_BETA_URL !== "" &&
@@ -52,6 +57,9 @@ const useWikipedia =
   config.WIKIPEDIA_ENTERPRISE_USERNAME !== "" &&
   config.WIKIPEDIA_ENTERPRISE_PASSWORD !== undefined &&
   config.WIKIPEDIA_ENTERPRISE_PASSWORD !== "";
+const useBrowserService =
+  config.BROWSER_SERVICE_URL !== "" &&
+  config.BROWSER_SERVICE_URL !== undefined;
 
 const engines: Engine[] = [
   ...(useWikipedia ? ["wikipedia" as const] : []),
@@ -67,6 +75,7 @@ const engines: Engine[] = [
       ]
     : []),
   ...(usePlaywright ? ["playwright" as const] : []),
+  ...(useBrowserService ? ["browser-service" as const] : []),
   "fetch",
   "pdf",
   "document",
@@ -166,6 +175,7 @@ const engineHandlers: {
   pdf: scrapePDF,
   document: scrapeDocument,
   wikipedia: scrapeURLWithWikipedia,
+  "browser-service": scrapeURLWithBrowserService,
 };
 
 const engineMRTs: {
@@ -190,6 +200,7 @@ const engineMRTs: {
   pdf: pdfMaxReasonableTime,
   document: documentMaxReasonableTime,
   wikipedia: wikipediaMaxReasonableTime,
+  "browser-service": browserServiceMaxReasonableTime,
 };
 
 const engineOptions: {
@@ -462,6 +473,26 @@ const engineOptions: {
     },
     quality: 500, // below index (1000) so cache is tried first, above fire-engine (50)
   },
+  "browser-service": {
+    features: {
+      actions: true,
+      waitFor: true,
+      screenshot: false,
+      "screenshot@fullScreen": false,
+      pdf: false,
+      document: false,
+      audio: false,
+      atsv: false,
+      location: false,
+      mobile: false,
+      skipTlsVerification: true,
+      useFastMode: false,
+      stealthProxy: false,
+      branding: false,
+      disableAdblock: false,
+    },
+    quality: 55,
+  },
 };
 
 export function shouldUseIndex(meta: Meta) {
@@ -529,6 +560,10 @@ export async function buildFallbackList(meta: Meta): Promise<
     _engines.length = 0;
     _engines.push(...indexEngines);
     meta.internalOptions.forceEngine = indexEngines;
+  } else if (useBrowserService && meta.options.profile) {
+    _engines.length = 0;
+    _engines.push("browser-service" as Engine);
+    meta.internalOptions.forceEngine = "browser-service";
   } else if (!shouldUseIndex(meta)) {
     const indexIndex = _engines.indexOf("index");
     if (indexIndex !== -1) {
