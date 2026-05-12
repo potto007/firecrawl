@@ -1,4 +1,4 @@
-import { supabase_service } from "../supabase";
+import { isSupabaseAvailable, supabase_service } from "../supabase";
 import { config } from "../../config";
 import "dotenv/config";
 import { logger as _logger } from "../../lib/logger";
@@ -38,11 +38,10 @@ async function robustInsert(
   force: boolean,
   logger: Logger,
 ) {
-  if (config.USE_DB_AUTHENTICATION !== true) {
-    logger.info(
-      "Skipping database insertion due to USE_DB_AUTHENTICATION being off",
-      { table },
-    );
+  if (!isSupabaseAvailable()) {
+    logger.debug("Skipping database insertion: Supabase not configured", {
+      table,
+    });
     return;
   }
 

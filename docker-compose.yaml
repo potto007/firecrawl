@@ -45,9 +45,9 @@ x-common-env: &common-env
   BULL_AUTH_KEY: ${BULL_AUTH_KEY}
   MINERU_LOCAL_URL: ${MINERU_LOCAL_URL:-}
   TEST_API_KEY: ${TEST_API_KEY}
-  SUPABASE_ANON_TOKEN: ${SUPABASE_ANON_TOKEN}
-  SUPABASE_URL: ${SUPABASE_URL}
-  SUPABASE_SERVICE_TOKEN: ${SUPABASE_SERVICE_TOKEN}
+  SUPABASE_ANON_TOKEN: ${SUPABASE_ANON_TOKEN:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MjAwMDAwMDAwMH0.mjENke8J4x_734atFXjInx76tWeHpG_5y1KaXY_3Smg}
+  SUPABASE_URL: ${SUPABASE_URL:-http://supabase-gateway:8000}
+  SUPABASE_SERVICE_TOKEN: ${SUPABASE_SERVICE_TOKEN:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MjAwMDAwMDAwMH0.mjENke8J4x_734atFXjInx76tWeHpG_5y1KaXY_3Smg}
   SELF_HOSTED_WEBHOOK_URL: ${SELF_HOSTED_WEBHOOK_URL}
   LOGGING_LEVEL: ${LOGGING_LEVEL}
   PROXY_SERVER: ${PROXY_SERVER}
@@ -105,6 +105,8 @@ services:
         condition: service_started
       rabbitmq:
         condition: service_healthy
+      supabase-gateway:
+        condition: service_started
     ports:
       - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
     command: node dist/src/harness.js --start-docker
@@ -158,6 +160,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - backend
     logging:
@@ -165,6 +173,40 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+        compress: "true"
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    environment:
+      PGRST_DB_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@nuq-postgres:5432/${POSTGRES_DB:-postgres}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: service_role
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_DB_EXTRA_SEARCH_PATH: public
+    depends_on:
+      nuq-postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+        compress: "true"
+
+  supabase-gateway:
+    build: docker/supabase-gateway
+    depends_on:
+      postgrest:
+        condition: service_started
+    networks:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
         compress: "true"
 
   mineru:

@@ -23,18 +23,8 @@ class SupabaseService {
     const supabaseReplicaUrl = config.SUPABASE_REPLICA_URL;
     const supabaseServiceToken = config.SUPABASE_SERVICE_TOKEN;
     const useDbAuthentication = config.USE_DB_AUTHENTICATION;
-    // Only initialize the Supabase client if both URL and Service Token are provided.
-    if (!useDbAuthentication) {
-      // Warn the user that Authentication is disabled by setting the client to null
-      logger.warn(
-        "Authentication is disabled. Supabase client will not be initialized.",
-      );
-      this.client = null;
-    } else if (!supabaseUrl || !supabaseServiceToken || !supabaseReplicaUrl) {
-      logger.error(
-        "Supabase environment variables aren't configured correctly. Supabase client will not be initialized. Fix ENV configuration or disable DB authentication with USE_DB_AUTHENTICATION env variable",
-      );
-    } else {
+
+    if (supabaseUrl && supabaseServiceToken) {
       this.client = createClient(supabaseUrl, supabaseServiceToken, {
         global: {
           headers: {
@@ -43,17 +33,35 @@ class SupabaseService {
         },
       });
 
-      this.rrClient = createClient(supabaseReplicaUrl, supabaseServiceToken);
+      const replicaUrl = supabaseReplicaUrl || supabaseUrl;
+      this.rrClient = createClient(replicaUrl, supabaseServiceToken);
+
+      if (!useDbAuthentication) {
+        logger.info(
+          "Supabase client initialized (auth disabled, data features available).",
+        );
+      }
+    } else if (useDbAuthentication) {
+      logger.error(
+        "USE_DB_AUTHENTICATION is enabled but SUPABASE_URL or SUPABASE_SERVICE_TOKEN is missing. Supabase client will not be initialized.",
+      );
+    } else {
+      logger.warn(
+        "Supabase not configured. Features requiring Supabase (interact, profiles) will be unavailable.",
+      );
     }
   }
 
-  // Provides access to the initialized Supabase client, if available.
   getClient(): SupabaseClient | null {
     return this.client;
   }
 
   getRRClient(): SupabaseClient | null {
     return this.rrClient;
+  }
+
+  isAvailable(): boolean {
+    return this.client !== null;
   }
 }
 
@@ -79,6 +87,10 @@ export const supabase_service: SupabaseClient = new Proxy(serv, {
   },
 }) as unknown as SupabaseClient;
 
+export function isSupabaseAvailable(): boolean {
+  return serv.isAvailable();
+}
+
 export const supabase_rr_service: SupabaseClient = new Proxy(serv, {
   get: function (target, prop, receiver) {
     const client = target.getRRClient();
@@ -96,4 +108,3 @@ export const supabase_rr_service: SupabaseClient = new Proxy(serv, {
     return Reflect.get(client, prop, receiver);
   },
 }) as unknown as SupabaseClient;
-

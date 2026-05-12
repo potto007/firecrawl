@@ -31,6 +31,109 @@ ALTER SYSTEM SET commit_siblings = 5;                  -- Min concurrent transac
 
 SELECT pg_reload_conf();
 
+-- PostgREST roles for self-hosted Supabase compatibility
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator') THEN
+    CREATE ROLE authenticator NOINHERIT LOGIN PASSWORD 'postgres';
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
+    CREATE ROLE service_role NOLOGIN;
+  END IF;
+END $$;
+
+GRANT service_role TO authenticator;
+
+-- ---------------------------------------------------------------------------
+-- Browser sessions tables (used by interact / persistent profiles)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.browser_sessions (
+  id uuid NOT NULL,
+  team_id uuid NOT NULL,
+  scrape_id uuid,
+  browser_id text NOT NULL,
+  workspace_id text NOT NULL DEFAULT '',
+  context_id text NOT NULL DEFAULT '',
+  cdp_url text NOT NULL,
+  cdp_path text NOT NULL DEFAULT '',
+  cdp_interactive_path text NOT NULL DEFAULT '',
+  stream_web_view boolean NOT NULL DEFAULT true,
+  status text NOT NULL DEFAULT 'active',
+  ttl_total integer NOT NULL DEFAULT 600000,
+  ttl_without_activity integer,
+  credits_used numeric,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  CONSTRAINT browser_sessions_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS browser_sessions_team_id_idx ON public.browser_sessions (team_id);
+CREATE INDEX IF NOT EXISTS browser_sessions_scrape_id_idx ON public.browser_sessions (scrape_id);
+CREATE INDEX IF NOT EXISTS browser_sessions_browser_id_idx ON public.browser_sessions (browser_id);
+CREATE INDEX IF NOT EXISTS browser_sessions_status_idx ON public.browser_sessions (status);
+
+CREATE TABLE IF NOT EXISTS public.browser_session_activities (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  team_id uuid NOT NULL,
+  session_id uuid NOT NULL REFERENCES public.browser_sessions(id),
+  source text NOT NULL,
+  language text NOT NULL DEFAULT 'node',
+  timeout integer NOT NULL DEFAULT 30,
+  exit_code integer,
+  killed boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT browser_session_activities_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS browser_session_activities_session_id_idx ON public.browser_session_activities (session_id);
+
+-- ---------------------------------------------------------------------------
+-- Requests / scrapes tables (used by logging and interact replay)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.requests (
+  id uuid NOT NULL,
+  kind text NOT NULL,
+  api_version text,
+  team_id uuid NOT NULL,
+  origin text,
+  integration text,
+  target_hint text,
+  dr_clean_by timestamptz,
+  api_key_id integer,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT requests_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS requests_team_id_idx ON public.requests (team_id);
+
+CREATE TABLE IF NOT EXISTS public.scrapes (
+  id uuid NOT NULL,
+  request_id uuid,
+  url text,
+  is_successful boolean NOT NULL DEFAULT false,
+  error text,
+  time_taken integer,
+  team_id uuid NOT NULL,
+  options jsonb,
+  cost_tracking jsonb,
+  pdf_num_pages integer,
+  credits_cost numeric DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT scrapes_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS scrapes_team_id_idx ON public.scrapes (team_id);
+CREATE INDEX IF NOT EXISTS scrapes_request_id_idx ON public.scrapes (request_id);
+
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE ON SCHEMA public TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+
 CREATE SCHEMA IF NOT EXISTS nuq;
 
 DO $$ BEGIN
