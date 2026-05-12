@@ -266,6 +266,8 @@ const configSchema = z.object({
   BROWSER_SERVICE_URL: z.string().optional(),
   BROWSER_SERVICE_API_KEY: z.string().optional(),
   BROWSER_SERVICE_WEBHOOK_SECRET: z.string().optional(),
+  BROWSER_SESSION_DEFAULT_TTL: z.coerce.number().optional(),
+  BROWSER_SESSION_MAX_TTL: z.coerce.number().optional(),
 
   // Audio (avgrab)
   AVGRAB_SERVICE_URL: z.string().optional(),
