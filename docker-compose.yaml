@@ -35,7 +35,7 @@ x-common-env: &common-env
   CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
   MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
   BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
-  BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://playwright-service:3000}
+  BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://browser-service:3001}
   OPENAI_API_KEY: ${OPENAI_API_KEY}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL}
   MODEL_NAME: ${MODEL_NAME}
@@ -88,6 +88,25 @@ services:
     tmpfs:
       - /tmp/.cache:noexec,nosuid,size=1g
 
+  browser-service:
+    build: apps/browser-service
+    environment:
+      PORT: 3001
+      BROWSER_SERVICE_API_KEY: ${BROWSER_SERVICE_API_KEY:-}
+    networks:
+      - backend
+    cpus: 2.0
+    mem_limit: 4G
+    memswap_limit: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+
   api:
     <<: *common-service
     environment:
@@ -103,6 +122,8 @@ services:
       redis:
         condition: service_started
       playwright-service:
+        condition: service_started
+      browser-service:
         condition: service_started
       rabbitmq:
         condition: service_healthy
