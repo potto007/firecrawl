@@ -147,68 +147,82 @@ export async function scrapeInteractController(
     return res.status(403).json({ success: false, error: "Forbidden." });
   }
 
-  // --- Build replay context from original scrape ---
-
-  const replay = buildReplayContextFromScrape(scrape);
-  if (!replay.context) {
-    return res.status(409).json({
-      success: false,
-      error:
-        replay.error ??
-        "Replay context is unavailable for this scrape job. Please rerun the scrape.",
-    });
-  }
-  const replayContext = replay.context;
-
-  logger = logger.child({
-    replayTargetUrl: replayContext.targetUrl,
-    replayWaitForMs: replayContext.waitForMs,
-    replayActions: replayContext.actions.length,
-  });
-
-  // --- Ensure a browser session exists (create + replay if needed) ---
+  // --- Check for existing browser session (created by browser-service engine) ---
 
   let session = await getBrowserSessionFromScrape(scrapeId);
 
-  if (!session && req.body.existingSessionId) {
-    const existing = await getBrowserSession(req.body.existingSessionId);
-    if (
-      existing &&
-      existing.team_id === req.auth.team_id &&
-      existing.status === "active"
-    ) {
-      await updateBrowserSessionScrapeId(existing.id, scrapeId);
-      session = { ...existing, scrape_id: scrapeId };
-      logger.info("Adopted pre-created browser session for scrape", {
+  let replayContext: ReturnType<typeof buildReplayContextFromScrape>["context"] | undefined;
+
+  if (session && session.status === "active") {
+    logger = logger.child({
+      sessionId: session.id,
+      browserId: session.browser_id,
+    });
+    logger.info("Reusing existing browser session from scrape (no replay needed)", {
+      scrapeId,
+      sessionId: session.id,
+      browserId: session.browser_id,
+    });
+  } else {
+    session = null;
+
+    const replay = buildReplayContextFromScrape(scrape);
+    if (!replay.context) {
+      return res.status(409).json({
+        success: false,
+        error:
+          replay.error ??
+          "Replay context is unavailable for this scrape job. Please rerun the scrape.",
+      });
+    }
+    replayContext = replay.context;
+
+    logger = logger.child({
+      replayTargetUrl: replayContext.targetUrl,
+      replayWaitForMs: replayContext.waitForMs,
+      replayActions: replayContext.actions.length,
+    });
+
+    if (req.body.existingSessionId) {
+      const existing = await getBrowserSession(req.body.existingSessionId);
+      if (
+        existing &&
+        existing.team_id === req.auth.team_id &&
+        existing.status === "active"
+      ) {
+        await updateBrowserSessionScrapeId(existing.id, scrapeId);
+        session = { ...existing, scrape_id: scrapeId };
+        logger.info("Adopted pre-created browser session for scrape", {
+          scrapeId,
+          sessionId: session.id,
+          browserId: session.browser_id,
+        });
+      }
+    }
+
+    if (!session) {
+      const created = await createSessionForScrape(
+        req,
+        scrapeId,
+        replayContext,
+        logger,
+        (scrape.options as ScrapeOptions).profile,
+      );
+      if ("error" in created) {
+        return res.status(created.status).json(created.body);
+      }
+      session = created.session;
+
+      logger = logger.child({
+        sessionId: session.id,
+        browserId: session.browser_id,
+      });
+      logger.info("Browser session created for scrape", {
         scrapeId,
         sessionId: session.id,
         browserId: session.browser_id,
       });
     }
-  }
-
-  if (!session) {
-    const created = await createSessionForScrape(
-      req,
-      scrapeId,
-      replayContext,
-      logger,
-      (scrape.options as ScrapeOptions).profile,
-    );
-    if ("error" in created) {
-      return res.status(created.status).json(created.body);
-    }
-    session = created.session;
-
-    logger = logger.child({
-      sessionId: session.id,
-      browserId: session.browser_id,
-    });
-    logger.info("Browser session created for scrape", {
-      scrapeId,
-      sessionId: session.id,
-      browserId: session.browser_id,
-    });
   }
 
   if (session.team_id !== req.auth.team_id) {
@@ -238,9 +252,9 @@ export async function scrapeInteractController(
   };
   const traceScrapeContext = {
     scrapeUrl: sanitizeUrlForTrace(scrape.url),
-    targetUrl: sanitizeUrlForTrace(replayContext.targetUrl),
-    scrapeWaitForMs: replayContext.waitForMs,
-    scrapeActions: replayContext.actions.length,
+    targetUrl: replayContext ? sanitizeUrlForTrace(replayContext.targetUrl) : sanitizeUrlForTrace(scrape.url),
+    scrapeWaitForMs: replayContext?.waitForMs,
+    scrapeActions: replayContext?.actions.length,
     scrapeOrigin:
       typeof scrapeOptions.origin === "string"
         ? scrapeOptions.origin
