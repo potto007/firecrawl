@@ -59,9 +59,12 @@ import { autumnService } from "../../services/autumn/autumn.service";
 // Schemas
 // ---------------------------------------------------------------------------
 
+const maxTtl = config.BROWSER_SESSION_MAX_TTL ?? 3600;
+const defaultTtl = config.BROWSER_SESSION_DEFAULT_TTL ?? 600;
+
 const browserCreateRequestSchema = z.object({
-  ttl: z.number().min(30).max(3600).default(600),
-  activityTtl: z.number().min(10).max(3600).default(300),
+  ttl: z.number().min(30).max(maxTtl).default(defaultTtl),
+  activityTtl: z.number().min(10).max(maxTtl).default(300),
   streamWebView: z.boolean().default(true),
   integration: integrationSchema.optional().transform(val => val || null),
   profile: z
