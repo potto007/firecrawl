@@ -1,7 +1,9 @@
 import express from "express";
+import http from "http";
 import { chromium, Browser, BrowserContext, Page } from "playwright";
 import { v4 as uuidv4 } from "uuid";
-import { execSync } from "child_process";
+import { execSync, spawn, ChildProcess } from "child_process";
+import net from "net";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -14,6 +16,7 @@ const CDP_HOST = process.env.BROWSER_CDP_HOST || "localhost";
 const CDP_PORT = Number(process.env.BROWSER_CDP_PORT || 9222);
 
 let debugPort: number = 0;
+let chromiumProcess: ChildProcess | null = null;
 
 interface Session {
   id: string;
@@ -108,6 +111,8 @@ app.post("/browsers", authMiddleware, async (req, res) => {
     });
     const page = await context.newPage();
 
+    // Wait briefly for the page target to register in CDP
+    await new Promise(r => setTimeout(r, 500));
     const targetId = await getPageTargetId(page);
     const cdpUrl = targetId && debugPort
       ? `ws://${CDP_HOST}:${debugPort}/devtools/page/${targetId}`
@@ -135,7 +140,7 @@ app.post("/browsers", authMiddleware, async (req, res) => {
     };
     sessions.set(id, session);
 
-    console.log(`Session ${id} created (ttl=${clampedTtl}s, ${sessions.size} active)`);
+    console.log(`Session ${id} created (ttl=${clampedTtl}s, cdpUrl=${cdpUrl}, ${sessions.size} active)`);
 
     res.json({
       sessionId: id,
@@ -174,7 +179,6 @@ app.post("/browsers/:id/exec", authMiddleware, async (req, res) => {
     let killed = false;
 
     if (language === "node") {
-      // Execute JS with `page` in scope
       const asyncFn = new Function(
         "page",
         "context",
@@ -210,7 +214,6 @@ app.post("/browsers/:id/exec", authMiddleware, async (req, res) => {
         clearTimeout(timer);
       }
 
-      // Update page reference in case code navigated or switched tabs
       const pages = session.context.pages();
       if (pages.length > 0) {
         session.page = pages[pages.length - 1];
@@ -294,33 +297,154 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     activeSessions: sessions.size,
+    cdpPort: debugPort,
   });
 });
 
+// CDP proxy: forward /json and /json/* HTTP requests to Chromium
+app.get("/json/version", async (req, res) => cdpProxy(req, res));
+app.get("/json/list", async (req, res) => cdpProxy(req, res));
+app.get("/json", async (req, res) => cdpProxy(req, res));
+
+async function cdpProxy(req: express.Request, res: express.Response) {
+  if (!debugPort) return res.status(503).json({ error: "CDP not ready" });
+  try {
+    const upstream = await fetch(`http://127.0.0.1:${debugPort}${req.originalUrl}`);
+    const text = await upstream.text();
+    // Rewrite internal URLs so external clients can connect via this proxy
+    const rewritten = text.replace(
+      new RegExp(`(ws://)[^:]+:${debugPort}`, "g"),
+      `$1${CDP_HOST}:${PORT}`,
+    );
+    res.status(upstream.status).type("application/json").send(rewritten);
+  } catch (err) {
+    res.status(502).json({ error: "CDP proxy failed" });
+  }
+}
+
+function findChromiumPath(): string {
+  const candidates = [
+    "/usr/local/share/playwright/chromium-*/chrome-linux*/chrome",
+    "/ms-playwright/chromium-*/chrome-linux*/chrome",
+  ];
+  for (const pattern of candidates) {
+    try {
+      const result = execSync(`ls ${pattern} 2>/dev/null | head -1`, { encoding: "utf-8" }).trim();
+      if (result) return result;
+    } catch {}
+  }
+  try {
+    const result = execSync("which chromium || which chromium-browser || which google-chrome", { encoding: "utf-8" }).trim();
+    if (result) return result;
+  } catch {}
+  throw new Error("No Chromium binary found");
+}
+
+async function waitForCDP(port: number, maxWaitMs = 15000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (res.ok) return;
+    } catch {}
+    await new Promise(r => setTimeout(r, 200));
+  }
+  throw new Error(`CDP not ready after ${maxWaitMs}ms`);
+}
+
 async function start() {
-  browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      `--remote-debugging-port=${CDP_PORT}`,
-    ],
+  const chromiumPath = findChromiumPath();
+  console.log(`Chromium binary: ${chromiumPath}`);
+
+  // Launch Chromium directly with raw CDP
+  chromiumProcess = spawn(chromiumPath, [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    `--remote-debugging-port=${CDP_PORT}`,
+    "--remote-debugging-address=0.0.0.0",
+    "--remote-allow-origins=*",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-translate",
+    "--mute-audio",
+    "about:blank",
+  ], {
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
+  chromiumProcess.stderr?.on("data", (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line.includes("DevTools listening")) {
+      console.log(line);
+    }
+  });
+
+  chromiumProcess.on("exit", (code) => {
+    console.error(`Chromium exited with code ${code}`);
+    process.exit(1);
+  });
+
+  await waitForCDP(CDP_PORT);
   debugPort = CDP_PORT;
 
-  console.log(`Browser launched (CDP debug port: ${debugPort})`);
+  // Connect Playwright over CDP to manage sessions
+  browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+  console.log(`Playwright connected over CDP on port ${CDP_PORT}`);
 
-  app.listen(PORT, "0.0.0.0", () => {
+  // Close the default about:blank page that Chromium opened
+  const defaultPages = browser.contexts()[0]?.pages() ?? [];
+  for (const p of defaultPages) {
+    if (p.url() === "about:blank") await p.close().catch(() => {});
+  }
+
+  const server = http.createServer(app);
+
+  // WebSocket proxy: raw TCP pipe to Chromium's CDP
+  server.on("upgrade", (req, socket, head) => {
+    const path = req.url || "";
+    if (!path.startsWith("/devtools/")) {
+      socket.destroy();
+      return;
+    }
+
+    const upstream = net.connect(debugPort, "127.0.0.1", () => {
+      // Replay the original HTTP upgrade request to Chromium
+      const rawHeaders = `${req.method} ${path} HTTP/${req.httpVersion}\r\n` +
+        Object.entries(req.headers)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join("\r\n") +
+        "\r\n\r\n";
+      upstream.write(rawHeaders);
+      if (head.length) upstream.write(head);
+
+      // Bidirectional raw pipe
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+    });
+
+    upstream.on("error", () => socket.destroy());
+    socket.on("error", () => upstream.destroy());
+    upstream.on("close", () => socket.destroy());
+    socket.on("close", () => upstream.destroy());
+  });
+
+  server.listen(PORT, "0.0.0.0", () => {
     console.log(`Browser service listening on port ${PORT}`);
+    console.log(`CDP proxied via port ${PORT} (e.g. chrome://inspect -> localhost:${PORT})`);
   });
 
   process.on("SIGTERM", async () => {
     console.log("Shutting down...");
     for (const id of sessions.keys()) destroySession(id);
-    await browser.close();
+    await browser.close().catch(() => {});
+    chromiumProcess?.kill("SIGTERM");
     process.exit(0);
   });
 }

@@ -95,10 +95,13 @@ services:
     environment:
       PORT: 3001
       BROWSER_SERVICE_API_KEY: ${BROWSER_SERVICE_API_KEY:-}
-      BROWSER_CDP_HOST: ${BROWSER_CDP_HOST:-browser-service}
+      BROWSER_CDP_HOST: ${BROWSER_CDP_HOST:-localhost}
       BROWSER_CDP_PORT: ${BROWSER_CDP_PORT:-9222}
       BROWSER_SESSION_DEFAULT_TTL: ${BROWSER_SESSION_DEFAULT_TTL:-600}
       BROWSER_SESSION_MAX_TTL: ${BROWSER_SESSION_MAX_TTL:-3600}
+    ports:
+      - "9222:9222"
+      - "3001:3001"
     networks:
       - backend
     cpus: 2.0
