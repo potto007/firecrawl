@@ -12,4 +12,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install -U 'mineru[core]>=3.0.0' --break-system-packages && \
+    python3 -m pip install \
+    "raganything[studio] @ git+https://github.com/devinlovekoala/RAG-Anything.git@gui-support" \
+    --break-system-packages && \
     python3 -m pip cache purge
