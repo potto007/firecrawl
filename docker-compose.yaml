@@ -240,42 +240,44 @@ services:
         max-file: "2"
         compress: "true"
 
-  mineru:
-    build:
-      context: .
-      dockerfile: docker/mineru/Dockerfile
-    environment:
-      MINERU_MODEL_SOURCE: local
-    entrypoint: mineru-api
-    command: --host 0.0.0.0 --port 8000
-    networks:
-      - backend
-    volumes:
-      - ${MINERU_MODELS_DIR:-~/.models/mineru}:/root/.cache
-      - ${MINERU_MODELS_DIR:-~/.models/mineru}/mineru.json:/root/mineru.json
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    ipc: host
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-        compress: "true"
+  # MinerU is managed by ClearBridge LightRAG (~/src/lightrag/docker-compose.yml).
+  # Firecrawl reaches it as "lightrag-studio" on the lightrag_default network.
+  # mineru:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/mineru/Dockerfile
+  #   environment:
+  #     MINERU_MODEL_SOURCE: local
+  #   entrypoint: mineru-api
+  #   command: --host 0.0.0.0 --port 8000
+  #   networks:
+  #     - backend
+  #   volumes:
+  #     - ${MINERU_MODELS_DIR:-~/.models/mineru}:/root/.cache
+  #     - ${MINERU_MODELS_DIR:-~/.models/mineru}/mineru.json:/root/mineru.json
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ["0"]
+  #             capabilities: [gpu]
+  #   ulimits:
+  #     memlock: -1
+  #     stack: 67108864
+  #   ipc: host
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 120s
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+  #       compress: "true"
 
 networks:
   backend:
