@@ -64,3 +64,6 @@ _local/
 
 
 apps/api/src/lib/scrape-interact/*.md
+
+# local research/scratch output (firecrawl CLI skill)
+.firecrawl/
