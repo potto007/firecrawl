@@ -242,14 +242,20 @@ services:
 
   # MinerU is owned by this Firecrawl deployment. Other services reach it via
   # MINERU_LOCAL_URL=http://mineru:8000 on the backend network.
+  #
+  # The image ENTRYPOINT is a lazy-lifecycle gate (docker/mineru/Dockerfile +
+  # entrypoint.py): it owns :8000 and starts the real mineru-api child on the
+  # first PDF, then kills it after MINERU_IDLE_TIMEOUT seconds idle so the ~20GB
+  # vLLM GPU pool is released (the 32GB card is shared with the llama-server
+  # teacher; they cannot coexist). Do NOT add entrypoint/command here - that
+  # would bypass the gate and run mineru-api directly, which never unloads.
   mineru:
     build:
       context: .
       dockerfile: docker/mineru/Dockerfile
     environment:
       MINERU_MODEL_SOURCE: local
-    entrypoint: mineru-api
-    command: --host 0.0.0.0 --port 8000
+      MINERU_IDLE_TIMEOUT: ${MINERU_IDLE_TIMEOUT:-300}
     networks:
       - backend
     volumes:
