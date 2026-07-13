@@ -243,13 +243,27 @@ services:
   # MinerU is owned by this Firecrawl deployment. Other services reach it via
   # MINERU_LOCAL_URL=http://mineru:8000 on the backend network.
   #
+  # OPT-IN ONLY (profile). It reserves GPU 0 and its model pool is ~20GB on a card
+  # we share with vLLM / the llama-server teacher - they cannot coexist. A plain
+  # `docker compose up -d` must NOT start it, or scraping a page can evict an
+  # inference server. Start it deliberately, and only for PDF work:
+  #
+  #     docker compose up -d                                    # no mineru (default)
+  #     MINERU_LOCAL_URL=http://mineru:8000 \
+  #       docker compose --profile mineru up -d                 # with mineru
+  #
+  # MINERU_LOCAL_URL must be set in the SAME command: the api reads it from
+  # x-common-env (default empty), and pointing it at a mineru that is not running
+  # turns every PDF into a connection error instead of a fallback. Keep the two
+  # together - that is why it is not in .env.
+  #
   # The image ENTRYPOINT is a lazy-lifecycle gate (docker/mineru/Dockerfile +
   # entrypoint.py): it owns :8000 and starts the real mineru-api child on the
   # first PDF, then kills it after MINERU_IDLE_TIMEOUT seconds idle so the ~20GB
-  # vLLM GPU pool is released (the 32GB card is shared with the llama-server
-  # teacher; they cannot coexist). Do NOT add entrypoint/command here - that
-  # would bypass the gate and run mineru-api directly, which never unloads.
+  # vLLM GPU pool is released. Do NOT add entrypoint/command here - that would
+  # bypass the gate and run mineru-api directly, which never unloads.
   mineru:
+    profiles: ["mineru"]
     build:
       context: .
       dockerfile: docker/mineru/Dockerfile
