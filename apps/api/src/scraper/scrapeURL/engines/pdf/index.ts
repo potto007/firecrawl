@@ -35,7 +35,7 @@ import { withSpan, setSpanAttributes } from "../../../../lib/otel-tracer";
 import { scrapePDFWithRunPodMU } from "./runpodMU";
 import { reconcilePageCountWithFirePdf, scrapePDFWithFirePDF } from "./firePDF";
 import { scrapePDFWithParsePDF } from "./pdfParse";
-import { scrapePDFWithMinerULocal } from "./mineruLocal";
+import { scrapePDFWithDoclingLocal } from "./doclingLocal";
 import { captureExceptionWithZdrCheck } from "../../../../services/sentry";
 import { isPdfBuffer, PDF_SNIFF_WINDOW } from "./pdfUtils";
 import { comparePdfOutputs } from "./shadowComparison";
@@ -573,14 +573,14 @@ export async function scrapePDF(meta: Meta): Promise<EngineScrapeResult> {
       }
     }
 
-    // Local MinerU fallback (self-hosted GPU).
-    if (!result && !forceFirePDF && config.MINERU_LOCAL_URL) {
+    // Local docling-serve fallback (self-hosted, CPU).
+    if (!result && !forceFirePDF && config.DOCLING_LOCAL_URL) {
       try {
-        result = await scrapePDFWithMinerULocal(
+        result = await scrapePDFWithDoclingLocal(
           {
             ...meta,
             logger: meta.logger.child({
-              method: "scrapePDF/mineruLocal",
+              method: "scrapePDF/doclingLocal",
             }),
           },
           tempFilePath,
@@ -593,8 +593,8 @@ export async function scrapePDF(meta: Meta): Promise<EngineScrapeResult> {
         ) {
           throw error;
         }
-        meta.logger.warn("Local MinerU failed -- falling back to pdfParse", {
-          method: "scrapePDF/mineruLocal",
+        meta.logger.warn("Local docling failed -- falling back to pdfParse", {
+          method: "scrapePDF/doclingLocal",
           error,
           url: meta.rewrittenUrl ?? meta.url,
         });
