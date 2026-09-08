@@ -1,0 +1,40 @@
+# SearXNG settings for the local Firecrawl stack.
+# Firecrawl's search provider (apps/api/src/search/v2/searxng.ts) calls
+# GET /search?format=json, so the json format must be enabled here.
+# Everything not listed falls back to the image's built-in defaults.
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "firecrawl-searxng"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  # Only reachable on the compose backend network; the key is not sensitive.
+  secret_key: "firecrawl-local-searxng-not-secret"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+
+# Keep engines that answer fast and do not need an API key. Firecrawl passes
+# SEARXNG_ENGINES per request, which narrows this further.
+engines:
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: wikipedia
+    disabled: false

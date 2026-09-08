@@ -59,9 +59,13 @@ x-common-env: &common-env
   PROXY_SERVER: ${PROXY_SERVER}
   PROXY_USERNAME: ${PROXY_USERNAME}
   PROXY_PASSWORD: ${PROXY_PASSWORD}
-  SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
-  SEARXNG_ENGINES: ${SEARXNG_ENGINES}
-  SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES}
+  # Web search provider. Defaults to the bundled searxng service below; the
+  # DuckDuckGo HTML fallback (used when this is empty) gets rate-blocked as
+  # soon as a query needs a second page (limit >= 10). Set SEARXNG_ENDPOINT=
+  # (empty) to force the fallback.
+  SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT-http://searxng:8080}
+  SEARXNG_ENGINES: ${SEARXNG_ENGINES-duckduckgo,brave,bing,startpage}
+  SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES-general}
 
 services:
   playwright-service:
@@ -141,6 +145,8 @@ services:
         condition: service_healthy
       supabase-gateway:
         condition: service_started
+      searxng:
+        condition: service_started
     ports:
       - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
     command: node dist/src/harness.js --start-docker
@@ -149,6 +155,31 @@ services:
     cpus: 4.0
     mem_limit: 8G
     memswap_limit: 8G
+
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+    ports:
+      # Host loopback only, for manual debugging: curl 'http://127.0.0.1:8888/search?q=test&format=json'
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    networks:
+      - backend
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+        compress: "true"
 
   redis:
     # NOTE: If you want to use Valkey (open source) instead of Redis (source available),
@@ -242,6 +273,9 @@ services:
         max-size: "5m"
         max-file: "2"
         compress: "true"
+
+volumes:
+  searxng-cache:
 
 networks:
   backend:

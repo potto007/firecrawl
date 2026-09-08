@@ -72,11 +72,14 @@ USE_DB_AUTHENTICATION=false
 ## === /search API ===
 # By default, the /search API will use Google search.
 
-# You can specify a SearXNG server with the JSON format enabled, if you'd like to use that instead of direct Google.
-# You can also customize the engines and categories parameters, but the defaults should also work just fine.
-# SEARXNG_ENDPOINT=http://your.searxng.server
-# SEARXNG_ENGINES=
-# SEARXNG_CATEGORIES=
+# docker-compose.yaml bundles a SearXNG service (config: docker/searxng/settings.yml) and
+# points the api at it by default, so /search does not depend on the DuckDuckGo HTML
+# fallback (which gets rate-blocked whenever a query needs a second page, i.e. limit >= 10).
+# Override these to use another SearXNG server, or set SEARXNG_ENDPOINT= (empty) to force
+# the DuckDuckGo fallback.
+# SEARXNG_ENDPOINT=http://searxng:8080
+# SEARXNG_ENGINES=duckduckgo,brave,bing,startpage
+# SEARXNG_CATEGORIES=general
 
 ## === Other ===
 
