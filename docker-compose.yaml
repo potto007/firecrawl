@@ -212,12 +212,18 @@ services:
     networks:
       - backend
     command: rabbitmq-server
+    environment:
+      # Cap the CLI VM that each healthcheck boots: with default flags it starts
+      # one busy-waiting scheduler per host core (~2.2 CPU-s per check).
+      # Applies to rabbitmqctl/rabbitmq-diagnostics only, not the broker.
+      RABBITMQ_CTL_ERL_ARGS: "+S 1:1 +SDcpu 1:1 +sbwt none +sbwtdcpu none +sbwtdio none"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 30s
+      start_interval: 2s
     logging:
       driver: "json-file"
       options:
