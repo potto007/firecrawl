@@ -14,9 +14,19 @@ const DEFAULT_TTL = Number(process.env.BROWSER_SESSION_DEFAULT_TTL || 600);
 const MAX_TTL = Number(process.env.BROWSER_SESSION_MAX_TTL || 3600);
 const CDP_HOST = process.env.BROWSER_CDP_HOST || "localhost";
 const CDP_PORT = Number(process.env.BROWSER_CDP_PORT || 9222);
+// Hard cap on live sessions. Each session is one Chromium context; a busy page
+// fans out to several renderer processes, and 8 parallel sessions filled the
+// 4 GiB cgroup and left ~30 orphan renderers behind (2026-09-10).
+const MAX_SESSIONS = Number(process.env.BROWSER_MAX_SESSIONS || 4);
+// Refuse new sessions above this share of the cgroup memory limit; restart the
+// whole service when idle above it.
+const MEMORY_HIGH_WATER = Number(process.env.BROWSER_MEMORY_HIGH_WATER || 0.85);
+const CLOSE_TIMEOUT_MS = 5000;
+const REAP_INTERVAL_MS = 30000;
 
 let debugPort: number = 0;
 let chromiumProcess: ChildProcess | null = null;
+let shuttingDown = false;
 
 interface Session {
   id: string;
@@ -29,9 +39,11 @@ interface Session {
   timer: ReturnType<typeof setTimeout>;
   activityTimer: ReturnType<typeof setTimeout> | null;
   persistentStorage?: { uniqueId: string; write: boolean };
+  targetIds: Set<string>;
 }
 
 const sessions = new Map<string, Session>();
+let pendingSessions = 0;
 let browser: Browser;
 
 function authMiddleware(
@@ -45,14 +57,117 @@ function authMiddleware(
   res.status(401).json({ error: "Unauthorized" });
 }
 
-function destroySession(id: string) {
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
+async function cdpTargetId(page: Page): Promise<string | null> {
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    const info = await cdp.send("Target.getTargetInfo");
+    await cdp.detach().catch(() => {});
+    return info.targetInfo.targetId;
+  } catch {
+    return null;
+  }
+}
+
+async function recordTargets(session: Session): Promise<void> {
+  for (const p of session.context.pages()) {
+    const id = await cdpTargetId(p);
+    if (id) session.targetIds.add(id);
+  }
+}
+
+async function closeTargets(ids: Iterable<string>): Promise<number> {
+  let closed = 0;
+  let cdp;
+  try {
+    cdp = await browser.newBrowserCDPSession();
+    for (const targetId of ids) {
+      try {
+        await withTimeout(cdp.send("Target.closeTarget", { targetId }), 2000, "closeTarget");
+        closed++;
+      } catch {}
+    }
+  } catch {} finally {
+    await cdp?.detach().catch(() => {});
+  }
+  return closed;
+}
+
+async function destroySession(id: string): Promise<void> {
   const session = sessions.get(id);
   if (!session) return;
   clearTimeout(session.timer);
   if (session.activityTimer) clearTimeout(session.activityTimer);
-  session.context.close().catch(() => {});
   sessions.delete(id);
+  try {
+    await withTimeout(session.context.close(), CLOSE_TIMEOUT_MS, "context.close");
+  } catch (err) {
+    // Playwright could not close the context (Chromium starved or wedged).
+    // Kill the page targets directly so no renderer outlives the session.
+    const closed = await closeTargets(session.targetIds);
+    console.warn(
+      `Session ${id}: context.close failed (${err instanceof Error ? err.message : err}); ` +
+      `force-closed ${closed}/${session.targetIds.size} targets`,
+    );
+  }
   console.log(`Session ${id} destroyed (${sessions.size} remaining)`);
+}
+
+function cgroupMemoryFraction(): number | null {
+  try {
+    const fs = require("fs") as typeof import("fs");
+    const cur = Number(fs.readFileSync("/sys/fs/cgroup/memory.current", "utf-8"));
+    const maxRaw = fs.readFileSync("/sys/fs/cgroup/memory.max", "utf-8").trim();
+    if (maxRaw === "max") return null;
+    return cur / Number(maxRaw);
+  } catch {
+    return null;
+  }
+}
+
+// Every REAP_INTERVAL_MS: close page targets that no live session owns (seen
+// unowned on two consecutive passes, so a session mid-creation is spared), and
+// restart the service when memory is high and nothing is running.
+const unownedSeen = new Set<string>();
+async function reap(): Promise<void> {
+  if (shuttingDown) return;
+  try {
+    const res = await fetch(`http://127.0.0.1:${debugPort}/json`);
+    const targets = (await res.json()) as Array<{ id: string; type: string; url: string }>;
+    const owned = new Set<string>();
+    for (const s of sessions.values()) for (const t of s.targetIds) owned.add(t);
+    const orphans: string[] = [];
+    for (const t of targets) {
+      if (t.type !== "page" || owned.has(t.id)) continue;
+      if (unownedSeen.has(t.id)) orphans.push(t.id);
+      else unownedSeen.add(t.id);
+    }
+    for (const id of Array.from(unownedSeen)) {
+      if (!targets.some((t) => t.id === id)) unownedSeen.delete(id);
+    }
+    if (orphans.length) {
+      const closed = await closeTargets(orphans);
+      for (const id of orphans) unownedSeen.delete(id);
+      console.warn(`Reaper closed ${closed}/${orphans.length} orphan page targets`);
+    }
+  } catch (err) {
+    console.warn(`Reaper: target listing failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  const mem = cgroupMemoryFraction();
+  if (mem !== null && mem > MEMORY_HIGH_WATER && sessions.size === 0) {
+    console.error(`Memory at ${(mem * 100).toFixed(0)}% of cgroup limit with no sessions; exiting for a clean restart`);
+    process.exit(1);
+  }
 }
 
 function resetActivityTimer(session: Session) {
@@ -62,20 +177,6 @@ function resetActivityTimer(session: Session) {
     () => destroySession(session.id),
     session.activityTtl * 1000,
   );
-}
-
-async function getPageTargetId(page: Page): Promise<string | null> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${debugPort}/json`);
-    const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>;
-    const pageUrl = page.url();
-    const target = targets.find(
-      (t) => t.type === "page" && t.url === pageUrl,
-    );
-    return target?.id ?? null;
-  } catch {
-    return null;
-  }
 }
 
 // POST /browsers - create session
@@ -89,6 +190,21 @@ app.post("/browsers", authMiddleware, async (req, res) => {
 
     const clampedTtl = Math.min(Math.max(ttl, 30), MAX_TTL);
     const clampedActivityTtl = Math.min(Math.max(activityTtl, 10), clampedTtl);
+
+    // Reserve the slot before the first await, or parallel requests all pass
+    // the check and the cap does nothing.
+    if (sessions.size + pendingSessions >= MAX_SESSIONS) {
+      return res.status(429).json({
+        error: `Session limit reached (${MAX_SESSIONS}); retry later`,
+      });
+    }
+    pendingSessions++;
+    const mem = cgroupMemoryFraction();
+    if (mem !== null && mem > MEMORY_HIGH_WATER) {
+      return res.status(503).json({
+        error: `Browser memory at ${(mem * 100).toFixed(0)}% of limit; refusing new session`,
+      });
+    }
 
     if (persistentStorage?.write) {
       for (const s of sessions.values()) {
@@ -104,16 +220,20 @@ app.post("/browsers", authMiddleware, async (req, res) => {
     }
 
     const id = uuidv4();
-    const context = await browser.newContext({
-      viewport: { width: 1280, height: 720 },
-      userAgent:
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    });
-    const page = await context.newPage();
-
-    // Wait briefly for the page target to register in CDP
-    await new Promise(r => setTimeout(r, 500));
-    const targetId = await getPageTargetId(page);
+    let context: BrowserContext;
+    let page: Page;
+    let targetId: string | null;
+    try {
+      context = await browser.newContext({
+        viewport: { width: 1280, height: 720 },
+        userAgent:
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      });
+      page = await context.newPage();
+      targetId = await cdpTargetId(page);
+    } finally {
+      pendingSessions--;
+    }
     const cdpUrl = targetId && debugPort
       ? `ws://${CDP_HOST}:${debugPort}/devtools/page/${targetId}`
       : "";
@@ -137,6 +257,7 @@ app.post("/browsers", authMiddleware, async (req, res) => {
       timer,
       activityTimer,
       persistentStorage,
+      targetIds: new Set(targetId ? [targetId] : []),
     };
     sessions.set(id, session);
 
@@ -218,6 +339,7 @@ app.post("/browsers/:id/exec", authMiddleware, async (req, res) => {
       if (pages.length > 0) {
         session.page = pages[pages.length - 1];
       }
+      await recordTargets(session);
     } else if (language === "bash") {
       try {
         const output = execSync(code, {
@@ -287,7 +409,7 @@ app.delete("/browsers/:id", authMiddleware, async (req, res) => {
   }
 
   const durationMs = Date.now() - session.createdAt;
-  destroySession(req.params.id as string);
+  await destroySession(req.params.id as string);
 
   res.json({ ok: true, sessionDurationMs: durationMs });
 });
@@ -297,6 +419,8 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     activeSessions: sessions.size,
+    maxSessions: MAX_SESSIONS,
+    memoryFraction: cgroupMemoryFraction(),
     cdpPort: debugPort,
   });
 });
@@ -363,6 +487,10 @@ async function start() {
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-gpu",
+    // One renderer per page instead of one per cross-origin frame. Ad and
+    // embed iframes otherwise spawn a renderer each and multiply memory use.
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--renderer-process-limit=16",
     `--remote-debugging-port=${CDP_PORT}`,
     "--remote-debugging-address=0.0.0.0",
     "--remote-allow-origins=*",
@@ -397,6 +525,12 @@ async function start() {
   // Connect Playwright over CDP to manage sessions
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
   console.log(`Playwright connected over CDP on port ${CDP_PORT}`);
+  browser.on("disconnected", () => {
+    if (shuttingDown) return;
+    console.error("Playwright lost the CDP connection; exiting for a clean restart");
+    process.exit(1);
+  });
+  setInterval(() => { reap().catch(() => {}); }, REAP_INTERVAL_MS).unref();
 
   // Close the default about:blank page that Chromium opened
   const defaultPages = browser.contexts()[0]?.pages() ?? [];
@@ -441,8 +575,9 @@ async function start() {
   });
 
   process.on("SIGTERM", async () => {
+    shuttingDown = true;
     console.log("Shutting down...");
-    for (const id of sessions.keys()) destroySession(id);
+    await Promise.all(Array.from(sessions.keys()).map((id) => destroySession(id)));
     await browser.close().catch(() => {});
     chromiumProcess?.kill("SIGTERM");
     process.exit(0);

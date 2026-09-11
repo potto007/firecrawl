@@ -99,6 +99,9 @@ services:
 
   browser-service:
     build: apps/browser-service
+    # The service exits on its own when Chromium wedges or memory stays high
+    # while idle; this brings it back with a clean Chromium.
+    restart: unless-stopped
     environment:
       PORT: 3001
       BROWSER_SERVICE_API_KEY: ${BROWSER_SERVICE_API_KEY:-}
@@ -106,6 +109,8 @@ services:
       BROWSER_CDP_PORT: ${BROWSER_CDP_PORT:-9222}
       BROWSER_SESSION_DEFAULT_TTL: ${BROWSER_SESSION_DEFAULT_TTL:-600}
       BROWSER_SESSION_MAX_TTL: ${BROWSER_SESSION_MAX_TTL:-3600}
+      BROWSER_MAX_SESSIONS: ${BROWSER_MAX_SESSIONS:-4}
+      BROWSER_MEMORY_HIGH_WATER: ${BROWSER_MEMORY_HIGH_WATER:-0.85}
     ports:
       - "9222:9222"
       - "3001:3001"
