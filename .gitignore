@@ -67,3 +67,5 @@ apps/api/src/lib/scrape-interact/*.md
 
 # local research/scratch output (firecrawl CLI skill)
 .firecrawl/
+# docling-serve model cache (bind mount, ~900 MB)
+data/
