@@ -51,8 +51,9 @@ x-common-env: &common-env
   AUTUMN_SECRET_KEY: ${AUTUMN_SECRET_KEY}
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
   BULL_AUTH_KEY: ${BULL_AUTH_KEY}
-  # PDF fallback parser. docling-serve is owned by the LightRAG stack (~/src/lightrag,
-  # CPU only, bound to host loopback :5001). The api reaches it via host-gateway.
+  # PDF fallback parser: the docling-serve-gpu service below, bound to host loopback
+  # :5001 (owned here since 2026-10-21, when the LightRAG stack that used to run it was
+  # decommissioned; knowledge-base ADR-0010). The api reaches it via host-gateway.
   # Set DOCLING_LOCAL_URL= (empty) to disable; an unreachable URL falls back to pdfParse.
   DOCLING_LOCAL_URL: ${DOCLING_LOCAL_URL-http://host.docker.internal:5001}
   TEST_API_KEY: ${TEST_API_KEY}
@@ -288,6 +289,34 @@ services:
         max-size: "5m"
         max-file: "2"
         compress: "true"
+
+  docling-serve-gpu:
+    # PDF parser for the api's docling engine (DOCLING_LOCAL_URL). GPU build; holds about
+    # 2.3 GB VRAM while idle. Models are a bind mount so a recreate does not re-download
+    # them. Moved here from ~/src/lightrag/docker-compose.yml on 2026-10-21 unchanged.
+    image: ghcr.io/docling-project/docling-serve-cu130:v1.32.0
+    ports:
+      - "127.0.0.1:5001:5001"
+    environment:
+      DOCLING_SERVE_ARTIFACTS_PATH: /opt/app-root/src/models
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "2"
+      DOCLING_DEVICE: cuda
+    volumes:
+      - ./data/docling-models:/opt/app-root/src/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
 
 volumes:
   searxng-cache:
